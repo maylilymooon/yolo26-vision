@@ -1,7 +1,8 @@
-# YOLO26으로 배우는 컴퓨터 비전 입문
+# YOLO26 · MediaPipe로 배우는 컴퓨터 비전 입문
 
 > 강의 노트 · 2026-10-07
 > 주제: Ultralytics YOLO26을 이용한 객체 탐지 · 세그멘테이션 · 객체 추적
+> + MediaPipe를 이용한 손 랜드마크 · 제스처 인식 · 얼굴 AR 필터
 
 ---
 
@@ -14,6 +15,7 @@
 3. 같은 코드 구조로 **객체 탐지(Detection)**, **세그멘테이션(Segmentation)**, **객체 추적(Tracking)** 을 구현한다.
 4. 웹캠, 동영상 파일, 유튜브 영상을 입력으로 바꿔 가며 테스트한다.
 5. 완성한 코드를 GitHub에 올린다.
+6. MediaPipe Tasks로 **손 관절**, **손 제스처**, **얼굴 랜드마크** 를 다루고, 얼굴에 AR 필터를 합성한다.
 
 ---
 
@@ -27,6 +29,11 @@
 - [5교시. 세그멘테이션 (Segmentation)](#5교시-세그멘테이션-segmentation)
 - [6교시. 객체 추적 (Object Tracking)](#6교시-객체-추적-object-tracking)
 - [7교시. GitHub에 올리기](#7교시-github에-올리기)
+- [8교시. MediaPipe 시작하기](#8교시-mediapipe-시작하기)
+- [9교시. 손 랜드마크 (Hand Landmarker)](#9교시-손-랜드마크-hand-landmarker)
+- [10교시. 제스처 인식 (Gesture Recognizer)](#10교시-제스처-인식-gesture-recognizer)
+- [11교시. 얼굴 랜드마크로 AR 콧수염 필터 만들기](#11교시-얼굴-랜드마크로-ar-콧수염-필터-만들기)
+- [12교시. 트러블슈팅: 유튜브 영상이 중간에 끊겨요](#12교시-트러블슈팅-유튜브-영상이-중간에-끊겨요)
 - [정리 및 복습 문제](#정리-및-복습-문제)
 
 ---
@@ -319,12 +326,16 @@ python track.py "https://www.youtube.com/watch?v=Ng5FYQUasgg"
 ```gitignore
 __pycache__/
 *.pt
+*.task
+videos/
 ```
 
 | 제외 대상 | 이유 |
 |---|---|
 | `__pycache__/` | Python이 자동으로 만드는 캐시 폴더 |
 | `*.pt` | 모델 가중치 파일. 용량이 크고, 코드 실행 시 자동으로 다시 받을 수 있음 |
+| `*.task` | MediaPipe 모델 번들. 공식 링크에서 다시 받을 수 있음 (8교시) |
+| `videos/` | 테스트용으로 받은 유튜브 영상. 용량이 크고 저작권이 있음 |
 
 > 📌 **원칙:** 저장소에는 **사람이 작성한 것** 만 올리고, 자동으로 생기거나 다시 받을 수 있는 파일은 올리지 않습니다.
 
@@ -341,6 +352,280 @@ gh repo create yolo26-vision --public --source . --remote origin --push
 
 ---
 
+## 8교시. MediaPipe 시작하기
+
+후반부는 Google의 **MediaPipe Tasks** 로 손과 얼굴을 다룹니다. YOLO가 "사람·자동차 같은 **객체**"를 찾는다면, MediaPipe는 손가락 마디·눈·입술 같은 **신체의 세부 지점(랜드마크)** 을 찾는 데 특화돼 있습니다.
+
+### 라이브러리 설치
+
+```powershell
+pip install mediapipe             # MediaPipe Tasks (OpenCV contrib도 함께 설치됨)
+pip install "yt-dlp[default]" deno imageio-ffmpeg   # 유튜브 영상을 받아 테스트할 때만 필요
+```
+
+| 패키지 | 역할 |
+|---|---|
+| `mediapipe` | 손·제스처·얼굴 인식 모델 실행 |
+| `yt-dlp` | 유튜브 영상 다운로드 |
+| `deno` | yt-dlp가 유튜브 페이지의 JavaScript를 풀 때 쓰는 런타임. 없으면 **HTTP 403** 으로 다운로드가 막힙니다. |
+| `imageio-ffmpeg` | 영상 조각(HLS)을 하나의 mp4로 합칠 ffmpeg 실행 파일 |
+
+### 모델 파일(`.task`) 받기
+
+YOLO의 `.pt`와 달리 MediaPipe 모델은 **자동으로 받아지지 않습니다.** 공식 문서의 *Models* 표에서 `Latest` 링크를 눌러 받고, 코드와 같은 폴더에 둡니다. (이번 실습에서는 Claude in Chrome으로 받았습니다.)
+
+| 과제 | 공식 문서 | 모델 파일 |
+|---|---|---|
+| 손 랜드마크 | [Hand Landmarker](https://developers.google.com/edge/mediapipe/solutions/vision/hand_landmarker) | [`hand_landmarker.task`](https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task) (7.8MB) |
+| 제스처 인식 | [Gesture Recognizer](https://developers.google.com/edge/mediapipe/solutions/vision/gesture_recognizer) | [`gesture_recognizer.task`](https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/latest/gesture_recognizer.task) (8.4MB) |
+| 얼굴 랜드마크 | [Face Landmarker](https://developers.google.com/edge/mediapipe/solutions/vision/face_landmarker) | [`face_landmarker.task`](https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task) (3.8MB) |
+
+```powershell
+# 브라우저 대신 명령으로 받을 수도 있습니다
+curl.exe -L -o hand_landmarker.task https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task
+```
+
+### 세 스크립트의 공통 구조
+
+```python
+options = vision.HandLandmarkerOptions(                       # ① 옵션 정하기
+    base_options=BaseOptions(model_asset_path=MODEL_PATH),
+    running_mode=vision.RunningMode.VIDEO,
+    num_hands=2,
+)
+with vision.HandLandmarker.create_from_options(options) as landmarker:   # ② 모델 만들기
+    while True:
+        ok, frame = cap.read()                                # ③ OpenCV로 프레임 읽기
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)          # ④ BGR → RGB
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        result = landmarker.detect_for_video(mp_image, timestamp_ms)  # ⑤ 추론
+        draw_hands(frame, result)                             # ⑥ 결과 직접 그리기
+```
+
+YOLO와 비교하면 다음이 다릅니다.
+
+| | YOLO (Ultralytics) | MediaPipe Tasks |
+|---|---|---|
+| 영상 읽기 | `predict(source)`가 알아서 | **OpenCV `VideoCapture`로 직접** |
+| 색 순서 | 신경 안 써도 됨 | OpenCV는 BGR, MediaPipe는 **RGB** → 변환 필수 |
+| 결과 그리기 | `result.plot()` | **좌표를 받아 OpenCV로 직접** 그림 |
+| 유튜브 입력 | 바로 가능 | 먼저 파일로 받아야 함 (`download_youtube()`) |
+
+### `running_mode` 세 가지
+
+| 모드 | 호출 함수 | 용도 |
+|---|---|---|
+| `IMAGE` | `detect(img)` | 사진 한 장씩 따로 |
+| `VIDEO` | `detect_for_video(img, ms)` | 프레임을 순서대로. **이전 프레임의 위치로 추적** 해서 빠름 ← 오늘 사용 |
+| `LIVE_STREAM` | `detect_async(img, ms)` + 콜백 | 결과를 비동기로 받음. 처리가 밀리면 프레임을 건너뜀 |
+
+> ⚠️ `VIDEO` 모드의 타임스탬프(ms)는 **계속 커져야** 합니다. 같은 값이나 더 작은 값을 넣으면 오류가 납니다.
+
+---
+
+## 9교시. 손 랜드마크 (Hand Landmarker)
+
+📄 파일: [`hand_landmarker.py`](hand_landmarker.py)
+
+### 무엇을 알려주나?
+
+손 하나마다 **21개의 관절점** 과 **왼손/오른손** 정보를 돌려줍니다.
+
+| 번호 | 위치 |
+|---|---|
+| `0` | 손목 |
+| `1`–`4` | 엄지 (4 = 끝) |
+| `5`–`8` | 검지 (8 = 끝) |
+| `9`–`12` | 중지 (12 = 끝) |
+| `13`–`16` | 약지 (16 = 끝) |
+| `17`–`20` | 새끼 (20 = 끝) |
+
+손가락 끝(4, 8, 12, 16, 20)은 빨간 점, 나머지는 초록 점으로 그립니다.
+
+### 정규화 좌표 → 픽셀 좌표
+
+```python
+points = [(int(lm.x * w), int(lm.y * h)) for lm in landmarks]
+```
+
+랜드마크의 `x`, `y`는 **0~1 사이 비율** 입니다. 화면 너비·높이를 곱해야 실제 픽셀 위치가 됩니다.
+
+### 뼈대 그리기
+
+```python
+CONNECTIONS = vision.HandLandmarksConnections.HAND_CONNECTIONS   # (start, end) 쌍 목록
+for conn in CONNECTIONS:
+    cv2.line(frame, points[conn.start], points[conn.end], (255, 255, 255), 2)
+```
+
+> 💡 최신 MediaPipe(1.x)에는 예전의 `mp.solutions.drawing_utils`가 없습니다. 그래서 연결 정보만 받아 OpenCV로 직접 그립니다.
+
+### 왼손/오른손이 반대로 나와요
+
+MediaPipe는 **셀카처럼 좌우가 뒤집힌 영상** 을 기준으로 왼손/오른손을 판단합니다. 일반 영상(뒤집지 않은 영상)을 넣으면 `Left`/`Right`가 실제와 반대로 나옵니다. 웹캠에서는 `cv2.flip(frame, 1)`로 뒤집어 주면 맞게 나옵니다.
+
+### 실습
+
+```powershell
+python hand_landmarker.py                                                 # 웹캠
+python hand_landmarker.py "https://www.youtube.com/shorts/PWGWHPTTJ80"   # 손 쇼츠 영상
+```
+
+결과: 160프레임 전부에서 두 손 × 21개 관절이 검출됐습니다.
+
+---
+
+## 10교시. 제스처 인식 (Gesture Recognizer)
+
+📄 파일: [`gesture_recognizer.py`](gesture_recognizer.py)
+
+### 손 랜드마크 + 분류기
+
+Gesture Recognizer는 9교시의 손 랜드마크 모델 **위에 분류 모델을 하나 더** 얹은 것입니다. 그래서 결과에 `hand_landmarks`, `handedness`가 그대로 있고, `gestures`가 추가됩니다.
+
+| 제스처 | 이름 |
+|---|---|
+| ✊ | `Closed_Fist` |
+| ✋ | `Open_Palm` |
+| ☝️ | `Pointing_Up` |
+| 👍 / 👎 | `Thumb_Up` / `Thumb_Down` |
+| ✌️ | `Victory` |
+| 🤟 | `ILoveYou` |
+| (해당 없음) | `None` |
+
+### 코드 재사용
+
+```python
+from hand_landmarker import download_youtube, draw_hands
+```
+
+결과의 구조가 같기 때문에 9교시의 `draw_hands()`를 그대로 가져다 씁니다. 새로 만든 것은 제스처 이름을 손 위에 쓰는 `draw_gestures()`뿐입니다.
+
+```python
+top = gestures[0]   # 점수가 가장 높은 제스처
+cv2.putText(frame, f"{top.category_name} {top.score:.2f}", ...)
+```
+
+### 결과 해석하기
+
+| 테스트 영상 | 결과 (손이 잡힐 때마다 1회) |
+|---|---|
+| [손 쇼츠](https://www.youtube.com/shorts/PWGWHPTTJ80) | `None` 257, `Open_Palm` 53 |
+| [손 씻기 방송](https://www.youtube.com/watch?v=BMsHa1zIjK0) | `None` 4325, `Open_Palm` 717, `Thumb_Up` 108, `Closed_Fist` 9, `Thumb_Down` 2 |
+
+손 씻기 영상에서는 물에 손을 대는 동작이 `Thumb_Up 0.51`로 잡히기도 했습니다.
+
+> 📌 **교훈:** 모델은 **배운 7가지 중 하나로 억지로 분류** 하려고 합니다. 점수가 0.5 근처인 결과는 오인식일 가능성이 높으니, 실제 서비스에서는 점수 기준(예: 0.7 이상)을 두는 것이 좋습니다. 손 씻기 단계처럼 새로운 동작을 알아보게 하려면 **Model Maker로 직접 학습** 시켜야 합니다.
+
+### 실습
+
+```powershell
+python gesture_recognizer.py          # 웹캠 앞에서 👍 ✌️ ✊ 해보기
+python gesture_recognizer.py "https://www.youtube.com/watch?v=BMsHa1zIjK0"
+```
+
+---
+
+## 11교시. 얼굴 랜드마크로 AR 콧수염 필터 만들기
+
+📄 파일: [`face_mustache.py`](face_mustache.py)
+
+### Face Landmarker가 주는 것
+
+| 결과 | 내용 | 활용 예 |
+|---|---|---|
+| `face_landmarks` | 얼굴 **478개** 점 | AR 필터, 얼굴 정렬 |
+| `face_blendshapes` | 표정 수치 **52개** (`eyeBlinkLeft`, `jawOpen`, `mouthSmileLeft` …) | 깜빡임·졸음 감지, 표정 인식 |
+| `facial_transformation_matrixes` | 고개 회전·위치 | 고개 방향 추적 |
+
+오늘은 랜드마크 478개 중 **4개만** 써서 콧수염을 붙입니다.
+
+| 인덱스 | 위치 | 쓰임 |
+|---|---|---|
+| `2` | 코 밑 | 콧수염 **위치** |
+| `0` | 윗입술 위쪽 | 콧수염 **위치** |
+| `61`, `291` | 양쪽 입꼬리 | 콧수염 **크기** 와 **기울기** |
+
+### ① 위치·크기·기울기 계산
+
+```python
+center = px(NOSE_BOTTOM) * 0.4 + px(UPPER_LIP_TOP) * 0.6   # 코 밑~윗입술 사이 (입술 쪽으로)
+mouth_w = np.linalg.norm(right - left)                      # 입 너비
+angle = math.degrees(math.atan2(right[1] - left[1], right[0] - left[0]))  # 입꼬리 선의 기울기
+target_w = int(mouth_w * MUSTACHE_SCALE)                    # 콧수염 너비 = 입 너비 × 1.8
+```
+
+얼굴이 카메라에서 멀어지면 입 너비가 줄어 콧수염도 작아지고, 고개를 기울이면 입꼬리 선이 기울어 콧수염도 같이 기울어집니다.
+
+### ② 콧수염 이미지를 코드로 그리기
+
+이미지 파일을 따로 받지 않고 `make_mustache()`가 **투명 배경(BGRA)** 콧수염을 직접 그립니다.
+
+```python
+t = np.linspace(0, 1, 60)                                  # 0 = 가운데, 1 = 끝
+mid = ... + np.sin(t * math.pi) * ... - t ** 4 * ...       # 중심선: 살짝 처졌다가 끝에서 위로
+thick = height * 0.50 * (1 - t) ** 0.7 + ...               # 두께: 바깥으로 갈수록 얇게
+```
+
+오른쪽 절반의 윤곽을 계산한 뒤 **x를 좌우 대칭** 시켜 왼쪽을 만들고, 끝에 작은 원을 그려 말린 모양을 냅니다.
+
+### ③ 투명 이미지를 회전시켜 합성하기 (알파 블렌딩)
+
+```python
+alpha = patch[:, :, 3:4] / 255.0                         # 0 = 투명, 1 = 불투명
+roi[:] = patch[:, :, :3] * alpha + roi * (1 - alpha)     # 콧수염과 원본을 섞기
+```
+
+- 회전하면 모서리가 잘리므로, **대각선 길이의 정사각형 캔버스** 에 놓고 `cv2.warpAffine`으로 돌립니다.
+- 얼굴이 화면 가장자리에 있으면 콧수염이 화면 밖으로 나가므로, **화면 안쪽 부분만 잘라서** 합칩니다.
+
+### 실습
+
+```powershell
+python face_mustache.py                                                 # 웹캠
+python face_mustache.py "https://www.youtube.com/watch?v=FPXPxtBOS7E"   # 인터뷰 영상
+```
+
+결과: 15분 영상 전체에서 고르게 뽑은 18장면 모두 얼굴이 잡혔고, 정면·옆모습 모두 인중에 콧수염이 붙었습니다.
+
+### 연습 아이디어 (blendshape 활용)
+
+| 난이도 | 예시 | 사용할 값 |
+|---|---|---|
+| ★ | 눈 깜빡임 카운터 / 졸음 경고 | `eyeBlinkLeft`, `eyeBlinkRight` |
+| ★★ | 미소·입 벌림·놀람 표정 인식 | `mouthSmileLeft/Right`, `jawOpen`, `browInnerUp` |
+| ★★ | 고개 방향(정면/좌/우) 표시 | `facial_transformation_matrixes` |
+
+---
+
+## 12교시. 트러블슈팅: 유튜브 영상이 중간에 끊겨요
+
+MediaPipe 스크립트는 유튜브 주소를 받으면 `download_youtube()`로 `videos/` 폴더에 먼저 받아 둔 뒤 재생합니다. (한 번 받은 영상은 다시 받지 않습니다.) 이 과정에서 실제로 겪은 문제입니다.
+
+| 증상 | 원인 | 해결 |
+|---|---|---|
+| `HTTP Error 403: Forbidden` | yt-dlp가 유튜브의 JavaScript를 풀지 못함 (`No supported JavaScript runtime` 경고) | `pip install "yt-dlp[default]" deno` |
+| 15분 영상이 1분 6초에서 끝남 | 일반(DASH) 방식으로 받은 파일이 중간부터 깨짐 (`Invalid NAL unit size`) | **HLS(m3u8)** 방식을 우선해서 받기 |
+| 720p를 골랐는데 1920×1080으로 읽힘 | 위와 같은 깨진 파일 | 위와 같음 |
+
+```python
+video = "bestvideo[ext=mp4][vcodec^=avc1][width<=1280][height<=1280]"
+opts = {
+    "format": f"{video}[protocol^=m3u8]/{video}/best[ext=mp4]/best",   # HLS 우선
+    "ffmpeg_location": imageio_ffmpeg.get_ffmpeg_exe(),                # 조각 합치기용
+}
+```
+
+| 조건 | 의미 |
+|---|---|
+| `ext=mp4`, `vcodec^=avc1` | OpenCV가 잘 읽는 **H.264** 영상 |
+| `width<=1280`, `height<=1280` | 가로 영상은 720p, 세로 쇼츠는 720×1280까지. 용량과 처리 속도를 아낍니다. |
+| `bestvideo` | 소리는 받지 않습니다. 검출에는 필요 없으니까요. |
+
+> 📌 **교훈:** "실행은 되는데 결과가 이상하다"면 **입력 데이터부터 의심** 하세요. 이번에도 코드가 아니라 받은 영상 파일이 깨진 것이 원인이었습니다. `ffmpeg -i 파일 -c copy -f null -`로 프레임 수를 세어 보면 파일이 온전한지 확인할 수 있습니다.
+
+---
+
 ## 정리 및 복습 문제
 
 ### 오늘 만든 파일
@@ -350,6 +635,9 @@ gh repo create yolo26-vision --public --source . --remote origin --push
 | `webcam_detect.py` | 객체 탐지 | `yolo26n.pt` | `model.predict()` |
 | `segment.py` | 세그멘테이션 | `yolo26n-seg.pt` | `model.predict()` |
 | `track.py` | 객체 추적 | `yolo26n.pt` | `model.track(persist=True)` |
+| `hand_landmarker.py` | 손 랜드마크 (21점) | `hand_landmarker.task` | `detect_for_video()` |
+| `gesture_recognizer.py` | 손 제스처 (7종) | `gesture_recognizer.task` | `recognize_for_video()` |
+| `face_mustache.py` | 얼굴 AR 필터 | `face_landmarker.task` | `detect_for_video()` + 알파 블렌딩 |
 
 ### 실행 방법 (공통)
 
@@ -368,6 +656,9 @@ python <파일이름>.py "유튜브 주소"     # 유튜브
 3. **`predict()` → `track(persist=True)`** 로 바꾸면 추적이 된다.
 4. `source`에는 웹캠, 파일, 유튜브 주소를 모두 넣을 수 있다.
 5. 키 입력은 한글 상태, Caps Lock, 창 포커스의 영향을 받는다.
+6. MediaPipe는 **RGB 입력**, **0~1 정규화 좌표** 를 쓰고, 결과는 직접 그려야 한다.
+7. `VIDEO` 모드는 이전 프레임으로 추적해 빠르지만, 타임스탬프가 계속 커져야 한다.
+8. 랜드마크 몇 개의 **위치·거리·각도** 만으로 AR 필터의 위치·크기·회전을 정할 수 있다.
 
 ### 복습 문제
 
@@ -377,6 +668,9 @@ python <파일이름>.py "유튜브 주소"     # 유튜브
 4. `conf=0.5`를 `0.2`로 바꾸면 결과가 어떻게 달라질까요?
 5. `deque(maxlen=30)` 대신 일반 리스트를 쓰면 어떤 문제가 생길까요?
 6. `.gitignore`에 `*.pt`를 넣은 이유는 무엇인가요?
+7. MediaPipe에 OpenCV 프레임을 넣기 전에 꼭 해야 하는 변환은 무엇인가요?
+8. 일반 영상에서 오른손이 `Left`로 나오는 이유는 무엇인가요?
+9. 콧수염의 크기와 기울기를 정할 때 입꼬리 두 점(61, 291)을 쓰는 이유는 무엇인가요?
 
 <details>
 <summary>정답 보기</summary>
@@ -387,6 +681,9 @@ python <파일이름>.py "유튜브 주소"     # 유튜브
 4. 더 많은 객체를 찾지만, 잘못 찾은 객체(오탐)도 늘어난다.
 5. 점이 끝없이 쌓여 메모리를 계속 쓰고, 꼬리가 화면 전체에 길게 남는다.
 6. 모델 파일은 용량이 크고, 코드를 실행하면 자동으로 다시 받을 수 있기 때문이다.
+7. `cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)` — OpenCV는 BGR, MediaPipe는 RGB를 쓴다.
+8. MediaPipe는 좌우가 뒤집힌(셀카) 영상을 기준으로 왼손/오른손을 판단하기 때문이다.
+9. 두 점 사이 거리는 얼굴 크기에 비례하고, 두 점을 잇는 선의 각도는 고개 기울기를 따라가기 때문이다.
 
 </details>
 
@@ -396,3 +693,7 @@ python <파일이름>.py "유튜브 주소"     # 유튜브
 - [ ] `TRACKER`를 `botsort.yaml`로 바꿔서 ID가 얼마나 잘 유지되는지 비교해 보기
 - [ ] `track.py`에서 `person`만 추적하도록 바꿔 보기 (힌트: `predict`/`track`의 `classes=[0]` 옵션)
 - [ ] 화면에 가로선을 긋고, 선을 넘어간 사람 수를 세어 보기
+- [ ] `gesture_recognizer.py`에서 점수 0.7 미만과 `None`은 표시하지 않도록 바꿔 보기
+- [ ] `hand_landmarker.py`에 검지 끝(8번)으로 화면에 그림 그리는 기능 넣어 보기
+- [ ] Face Landmarker의 `eyeBlinkLeft/Right`로 눈 깜빡임 횟수 세기 (옵션: `output_face_blendshapes=True`)
+- [ ] 콧수염 대신 선글라스 붙여 보기 (힌트: 눈 바깥쪽 33, 263번)
