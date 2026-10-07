@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>리액션 캠</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Jua&family=Noto+Sans+KR:wght@400;600;800&display=swap">
+<style>
+  /* 카메라 앱: 어두운 화면 하나에 영상을 크게, 조작 버튼은 엄지가 닿는 아래쪽 */
+  :root {
+    --ink: #15120f;        /* 바탕 */
+    --panel: #221d19;      /* 버튼·카드 */
+    --line: #3a322b;
+    --paper: #f7efe4;      /* 글자 */
+    --muted: #b3a797;
+    --accent: #ff8a1f;     /* 따봉 주황 */
+    --pink: #ff4fa0;       /* 쁘-이 */
+    --ok: #4cc38a;
+    --display: "Jua", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+    --body: "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--ink); color: var(--paper); font: 15px/1.55 var(--body);
+    padding: env(safe-area-inset-top, 0px) 16px env(safe-area-inset-bottom, 0px);
+  }
+  main { max-width: 760px; margin: 0 auto; padding-block: 14px 28px; display: grid; gap: 14px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  h1 { margin: 0; font: 400 1.9rem/1 var(--display); letter-spacing: .01em; }
+  h1 span { color: var(--accent); }
+  .status {
+    font-size: .8rem; color: var(--muted); border: 1px solid var(--line); border-radius: 999px;
+    padding: 4px 10px; white-space: nowrap; font-variant-numeric: tabular-nums;
+  }
+  .status.ready { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 50%, var(--line)); }
+  .status.error { color: #ff7b6b; border-color: #6b2d25; }
+
+  .stage {
+    position: relative; width: 100%; aspect-ratio: 3 / 4; max-height: 68vh; margin: 0 auto;
+    background: #000; border-radius: 18px; overflow: hidden;
+  }
+  @media (min-width: 640px) { .stage { aspect-ratio: 4 / 3; } }
+  #out { width: 100%; height: 100%; object-fit: contain; display: block; }
+  #video { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+
+  .start {
+    position: absolute; inset: 0; display: grid; place-content: center; gap: 12px; padding: 20px;
+    text-align: center; background: radial-gradient(circle at 50% 35%, #2b231d, #120f0d 70%);
+  }
+  .start p { margin: 0; color: var(--muted); max-width: 32ch; justify-self: center; }
+  .start .big { font: 400 1.5rem/1.3 var(--display); color: var(--paper); }
+
+  button, .filebtn {
+    font: 600 1rem var(--body); color: var(--paper); background: var(--panel); border: 1px solid var(--line);
+    border-radius: 14px; padding: 12px 16px; cursor: pointer; min-height: 48px;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #1b1006; font-weight: 800; }
+  button:focus-visible, .filebtn:focus-within { outline: 3px solid var(--paper); outline-offset: 2px; }
+  button:disabled { opacity: .45; cursor: default; }
+  .filebtn { display: inline-grid; place-items: center; }
+  .filebtn input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; }
+  .controls > * { flex: 1 1 140px; }
+
+  .legend { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+  .legend h2 { grid-column: 1 / -1; margin: 6px 0 0; font: 600 .8rem var(--body); color: var(--muted); letter-spacing: .08em; }
+  .item {
+    display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+    padding: 10px 12px; border-radius: 12px; background: var(--panel); border: 1px solid var(--line); min-width: 0;
+  }
+  .item b { font: 400 1.15rem var(--display); }
+  .item small { color: var(--muted); font-size: .82rem; }
+  .item.off { opacity: .5; }
+  .note { color: var(--muted); font-size: .85rem; margin: 0; }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>리액션 <span>캠</span></h1>
+    <div id="status" class="status" role="status">모델 불러오는 중…</div>
+  </header>
+
+  <div class="stage">
+    <canvas id="out" width="640" height="480" aria-label="카메라 화면과 반응"></canvas>
+    <video id="video" playsinline muted></video>
+    <div id="start" class="start">
+      <div class="big">손동작과 표정에<br>반응하는 카메라</div>
+      <p>브이, 따봉, 주먹, 손바닥, 웃기, 찡그리기, 입 벌리기를 해 보세요.</p>
+      <button id="btnCam" class="primary" disabled>카메라 켜기</button>
+      <label class="filebtn" id="fileLabel">영상 파일로 해보기
+        <input id="file" type="file" accept="video/*" disabled>
+      </label>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button id="btnFlip" disabled>앞·뒤 카메라 바꾸기</button>
+    <button id="btnSkeleton" aria-pressed="true" disabled>손 뼈대 숨기기</button>
+    <button id="btnStop" disabled>멈추기</button>
+  </div>
+
+  <section class="legend" aria-label="반응 목록">
+    <h2>손</h2>
+    <div class="item"><small>✌️ 브이</small><b style="color:var(--accent)">따봉</b></div>
+    <div class="item"><small>✌️ 브이를 옆으로</small><b style="color:var(--pink)">쁘-이</b></div>
+    <div class="item"><small>👍 따봉</small><b style="color:var(--accent)">따봉</b></div>
+    <div class="item"><small>✊ 주먹</small><b style="color:#8f8fff">주먹</b></div>
+    <div class="item"><small>✋ 손 펴기</small><b style="color:var(--ok)">하이파이브</b></div>
+    <div class="item off"><small>🫰 반쪽 하트</small><b>하트</b></div>
+    <h2>얼굴</h2>
+    <div class="item"><small>😄 웃기</small><b style="color:#ffb000">스마일</b></div>
+    <div class="item"><small>😠 찡그리기</small><b style="color:#b07cff">웃으세용!</b></div>
+    <div class="item"><small>😮 입 벌리기</small><b>나방 🦋</b></div>
+  </section>
+  <p class="note">반쪽 하트는 기본 모델에 없는 동작이라 웹 버전에서는 아직 인식하지 않아요. 영상은 기기 안에서만 처리되고 어디로도 전송되지 않아요.</p>
+</main>
+
+<script type="module">
+import { FilesetResolver, GestureRecognizer, FaceLandmarker }
+  from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.1.0/vision_bundle.mjs";
+
+const WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.1.0/wasm";
+const MODEL = "https://storage.googleapis.com/mediapipe-models";
+const GESTURE_MODEL = `${MODEL}/gesture_recognizer/gesture_recognizer/float16/latest/gesture_recognizer.task`;
+const FACE_MODEL = `${MODEL}/face_landmarker/face_landmarker/float16/latest/face_landmarker.task`;
+
+// reaction_cam.py 와 같은 규칙
+const GESTURE_TEXT = {
+  v: ["따봉", "#ff8a1f"], v_side: ["쁘-이", "#ff4fa0"], thumbs_up: ["따봉", "#ff8a1f"],
+  fist: ["주먹", "#5a5adc"], palm: ["하이파이브", "#14a05a"], half_heart: ["하트", "#eb2846"],
+};
+const CANNED_TO_LABEL = { Victory: "v", Thumb_Up: "thumbs_up", Closed_Fist: "fist", Open_Palm: "palm" };
+const FACE_TEXT = { smile: ["스마일", "#ffaa00"], frown: ["웃으세용!", "#783cdc"] };
+const CANNED_MIN_SCORE = 0.5, SIDEWAYS_DEG = 50, SMOOTH_FRAMES = 5;
+const SMILE_MIN = 0.5, FROWN_MIN = 0.4, JAW_OPEN_MIN = 0.45, MOTHS_PER_SEC = 8, MOTH_LIFE = 3;
+const FOREHEAD = 10, UPPER_LIP = 13, LOWER_LIP = 14, MOUTH_L = 61, MOUTH_R = 291;
+
+const $ = (id) => document.getElementById(id);
+const canvas = $("out"), ctx = canvas.getContext("2d"), video = $("video");
+const statusEl = $("status");
+let recognizer, faceLandmarker, stream = null, facing = "user", mirror = true;
+let running = false, showSkeleton = true, lastVideoTime = -1, frameNo = 0;
+let handResult = null, faceResult = null, prevT = performance.now(), fpsAvg = 0;
+const handHist = [[], []], faceHist = [[], []];
+let moths = [], spawnCredit = 0;
+
+function setStatus(text, cls = "") { statusEl.textContent = text; statusEl.className = "status " + cls; }
+
+// ---------- 모델 불러오기 (GPU가 안 되는 기기는 CPU로)
+async function create(Task, path, extra) {
+  const vision = await FilesetResolver.forVisionTasks(WASM);
+  for (const delegate of ["GPU", "CPU"]) {
+    try {
+      return await Task.createFromOptions(vision, { baseOptions: { modelAssetPath: path, delegate }, runningMode: "VIDEO", ...extra });
+    } catch (e) { if (delegate === "CPU") throw e; }
+  }
+}
+async function init() {
+  try {
+    [recognizer, faceLandmarker] = await Promise.all([
+      create(GestureRecognizer, GESTURE_MODEL, { numHands: 2 }),
+      create(FaceLandmarker, FACE_MODEL, { numFaces: 1, outputFaceBlendshapes: true }),
+    ]);
+    await document.fonts.load('40px "Jua"').catch(() => {});
+    for (const id of ["btnCam", "file"]) $(id).disabled = false;
+    setStatus("준비됨", "ready");
+  } catch (e) {
+    console.error(e);
+    setStatus("모델을 못 불러왔어요. 새로고침해 주세요", "error");
+  }
+}
+
+// ---------- 입력: 카메라 / 영상 파일
+async function startCamera() {
+  stopInput();
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false,
+    });
+  } catch (e) {
+    setStatus(e.name === "NotAllowedError" ? "카메라 권한을 허용해 주세요" : "카메라를 열 수 없어요", "error");
+    return;
+  }
+  mirror = facing === "user";
+  video.srcObject = stream; video.loop = false;
+  await video.play();
+  begin();
+}
+function startFile(file) {
+  stopInput();
+  mirror = false;
+  video.srcObject = null; video.src = URL.createObjectURL(file); video.loop = true;
+  video.play().then(begin).catch((e) => {
+    // 다른 영상을 고르면 이전 재생 요청이 AbortError로 끝남: 오류가 아님
+    if (e.name !== "AbortError") setStatus("이 영상은 재생할 수 없어요. 폰으로 찍은 mp4를 넣어 보세요", "error");
+  });
+}
+function stopInput() {
+  running = false;
+  if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
+  video.pause();
+  if (video.src) { URL.revokeObjectURL(video.src); video.removeAttribute("src"); }
+}
+function begin() {
+  $("start").hidden = true;
+  for (const id of ["btnFlip", "btnSkeleton", "btnStop"]) $(id).disabled = false;
+  $("btnFlip").disabled = !stream;
+  running = true; lastVideoTime = -1; moths = []; handHist.forEach((h) => (h.length = 0)); faceHist.forEach((h) => (h.length = 0));
+  requestAnimationFrame(loop);
+}
+
+// ---------- 판단 규칙
+function majority(h) {
+  if (!h.length) return null;
+  const c = {}; let best = null;
+  for (const v of h) { c[v] = (c[v] || 0) + 1; if (best === null || c[v] > c[best]) best = v; }
+  return best !== "null" && c[best] > Math.floor(h.length / 2) ? best : null;
+}
+function push(h, v) { h.push(String(v)); if (h.length > SMOOTH_FRAMES) h.shift(); }
+function isSideways(lm, W, H) {
+  let dx = 0, dy = 0;
+  for (const [b, t] of [[5, 8], [9, 12]]) { dx += (lm[t].x - lm[b].x) * W; dy += (lm[t].y - lm[b].y) * H; }
+  return Math.atan2(Math.abs(dx), Math.abs(dy)) * 180 / Math.PI > SIDEWAYS_DEG;
+}
+function classifyHand(lm, gestures, W, H) {
+  const top = gestures[0];
+  let label = top && top.score >= CANNED_MIN_SCORE ? CANNED_TO_LABEL[top.categoryName] : null;
+  if (label === "v" && isSideways(lm, W, H)) label = "v_side";
+  return label || null;
+}
+function faceReaction(cats) {
+  const b = Object.fromEntries(cats.map((c) => [c.categoryName, c.score]));
+  const avg = (a, z) => (b[a] + b[z]) / 2;
+  if (avg("mouthSmileLeft", "mouthSmileRight") >= SMILE_MIN) return "smile";
+  const frown = Math.max(avg("browDownLeft", "browDownRight"), avg("mouthFrownLeft", "mouthFrownRight"), avg("noseSneerLeft", "noseSneerRight"));
+  return frown >= FROWN_MIN ? "frown" : null;
+}
+
+// ---------- 나방
+class Moth {
+  constructor(x, y, size) {
+    const a = (-160 + Math.random() * 140) * Math.PI / 180, speed = size * (4 + Math.random() * 4);
+    Object.assign(this, { x, y, vx: Math.cos(a) * speed, vy: Math.sin(a) * speed, size: size * (0.7 + Math.random() * 0.5),
+      phase: Math.random() * Math.PI * 2, hz: 6 + Math.random() * 4, age: 0 });
+  }
+  update(dt) {
+    this.age += dt;
+    const turn = Math.sin(this.age * 5 + this.phase) * 2.5 * dt, c = Math.cos(turn), s = Math.sin(turn);
+    [this.vx, this.vy] = [this.vx * c - this.vy * s, this.vx * s + this.vy * c];
+    this.x += this.vx * dt; this.y += this.vy * dt;
+  }
+  draw(g) {
+    const s = this.size, flap = 0.35 + 0.65 * Math.abs(Math.sin(this.age * this.hz * Math.PI + this.phase));
+    g.save(); g.translate(this.x, this.y); g.rotate(Math.atan2(this.vy, this.vx));
+    g.lineWidth = Math.max(1, s * 0.05); g.strokeStyle = "#3c3228";
+    for (const side of [1, -1]) {
+      for (const [along, across, rx, ry, col] of [[0.15, 0.55, 0.55, 0.75, "#78603f"], [-0.35, 0.45, 0.4, 0.55, "#645038"]]) {
+        g.beginPath(); g.ellipse(along * s, across * side * flap * s, rx * s, Math.max(1, ry * s * flap), 0, 0, Math.PI * 2);
+        g.fillStyle = col; g.fill(); g.stroke();
+      }
+    }
+    g.beginPath(); g.ellipse(0, 0, 0.6 * s, 0.18 * s, 0, 0, Math.PI * 2); g.fillStyle = "#2d231e"; g.fill();
+    g.beginPath();
+    for (const side of [1, -1]) { g.moveTo(0.6 * s, 0); g.lineTo(1.1 * s, 0.35 * side * s); }
+    g.strokeStyle = "#2d231e"; g.stroke();
+    g.restore();
+  }
+  alive(W, H) { const m = this.size * 2; return this.age < MOTH_LIFE && this.x > -m && this.x < W + m && this.y > -m && this.y < H + m; }
+}
+
+// ---------- 그리기
+function bubble(text, cx, by, color, size) {
+  ctx.font = `${size}px "Jua", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif`;
+  const tw = ctx.measureText(text).width, pad = size * 0.3, bw = tw + pad * 2, bh = size * 1.25 + pad;
+  const x = Math.min(Math.max(cx - bw / 2, 4), canvas.width - bw - 4);
+  const y = Math.min(Math.max(by - bh, 4), canvas.height - bh - 4);
+  ctx.beginPath(); ctx.roundRect(x, y, bw, bh, pad * 1.6);
+  ctx.fillStyle = "#fff"; ctx.fill(); ctx.lineWidth = Math.max(3, size / 10); ctx.strokeStyle = color; ctx.stroke();
+  ctx.fillStyle = color; ctx.textBaseline = "middle"; ctx.fillText(text, x + pad, y + bh / 2 + size * 0.04);
+}
+function drawSkeleton(lms, px, py) {
+  ctx.lineWidth = Math.max(2, canvas.width / 320); ctx.strokeStyle = "rgba(255,255,255,.85)";
+  ctx.beginPath();
+  for (const { start, end } of GestureRecognizer.HAND_CONNECTIONS) {
+    ctx.moveTo(px(lms[start]), py(lms[start])); ctx.lineTo(px(lms[end]), py(lms[end]));
+  }
+  ctx.stroke();
+  for (const [i, p] of lms.entries()) {
+    ctx.beginPath(); ctx.arc(px(p), py(p), Math.max(3, canvas.width / 200), 0, Math.PI * 2);
+    ctx.fillStyle = [4, 8, 12, 16, 20].includes(i) ? "#ff3b3b" : "#36d36a"; ctx.fill();
+  }
+}
+
+// ---------- 매 프레임
+function loop() {
+  if (!running) return;
+  if (video.readyState >= 2 && video.currentTime !== lastVideoTime) {
+    lastVideoTime = video.currentTime;
+    process();
+  }
+  requestAnimationFrame(loop);
+}
+function process() {
+  const W = video.videoWidth, H = video.videoHeight;
+  if (!W) return;
+  if (canvas.width !== W || canvas.height !== H) { canvas.width = W; canvas.height = H; }
+  const now = performance.now(), dt = Math.min((now - prevT) / 1000, 0.1);
+  fpsAvg = fpsAvg * 0.9 + (1 / Math.max(dt, 1e-3)) * 0.1; prevT = now;
+
+  // 손과 얼굴을 번갈아 인식해서 폰에서도 부드럽게 (그리기는 매 프레임 최신 결과로)
+  if (frameNo++ % 2 === 0) handResult = recognizer.recognizeForVideo(video, now);
+  else faceResult = faceLandmarker.detectForVideo(video, now);
+
+  ctx.save();
+  if (mirror) { ctx.translate(W, 0); ctx.scale(-1, 1); }
+  ctx.drawImage(video, 0, 0, W, H);
+  ctx.restore();
+  const px = (p) => (mirror ? 1 - p.x : p.x) * W, py = (p) => p.y * H;
+  const size = Math.max(26, Math.round(H / 13));
+  const labels = [];
+
+  if (handResult) {
+    const lms = handResult.landmarks;
+    const order = lms.map((_, i) => i).sort((a, b) => px(lms[a][0]) - px(lms[b][0]));
+    for (let slot = 0; slot < 2; slot++) {
+      if (slot >= order.length) { handHist[slot].length = 0; continue; }
+      const i = order[slot], lm = lms[i];
+      if (showSkeleton) drawSkeleton(lm, px, py);
+      push(handHist[slot], classifyHand(lm, handResult.gestures[i], W, H));
+      const shown = majority(handHist[slot]);
+      if (shown) {
+        const cx = lm.reduce((s, p) => s + px(p), 0) / lm.length, top = Math.min(...lm.map(py));
+        labels.push([...GESTURE_TEXT[shown], cx, top - 10]);
+      }
+    }
+  }
+
+  if (faceResult && faceResult.faceLandmarks.length) {
+    const lm = faceResult.faceLandmarks[0], cats = faceResult.faceBlendshapes[0]?.categories || [];
+    push(faceHist[0], cats.length ? faceReaction(cats) : null);
+    const shown = majority(faceHist[0]);
+    if (shown) labels.push([...FACE_TEXT[shown], px(lm[FOREHEAD]), py(lm[FOREHEAD]) - 20]);
+    const jaw = cats.find((c) => c.categoryName === "jawOpen")?.score || 0;
+    if (jaw >= JAW_OPEN_MIN) {
+      const mouthW = Math.hypot(px(lm[MOUTH_R]) - px(lm[MOUTH_L]), py(lm[MOUTH_R]) - py(lm[MOUTH_L]));
+      const mx = (px(lm[UPPER_LIP]) + px(lm[LOWER_LIP])) / 2, my = (py(lm[UPPER_LIP]) + py(lm[LOWER_LIP])) / 2;
+      spawnCredit += MOTHS_PER_SEC * Math.min(1, jaw) * dt;   // 크게 벌릴수록 많이
+      while (spawnCredit >= 1) { moths.push(new Moth(mx, my, mouthW * 0.35)); spawnCredit -= 1; }
+    }
+  } else if (faceResult) { faceHist[0].length = 0; }
+
+  for (const m of moths) m.update(dt);
+  moths = moths.filter((m) => m.alive(W, H));
+  for (const m of moths) m.draw(ctx);
+  for (const [text, color, cx, by] of labels) bubble(text, cx, by, color, size);
+  setStatus(`${Math.round(fpsAvg)} fps`, "ready");
+}
+
+// ---------- 버튼
+$("btnCam").addEventListener("click", startCamera);
+$("file").addEventListener("change", (e) => { const f = e.target.files[0]; if (f) startFile(f); e.target.value = ""; });
+$("btnFlip").addEventListener("click", () => { facing = facing === "user" ? "environment" : "user"; startCamera(); });
+$("btnSkeleton").addEventListener("click", (e) => {
+  showSkeleton = !showSkeleton;
+  e.currentTarget.textContent = showSkeleton ? "손 뼈대 숨기기" : "손 뼈대 보이기";
+  e.currentTarget.setAttribute("aria-pressed", String(showSkeleton));
+});
+$("btnStop").addEventListener("click", () => {
+  stopInput(); $("start").hidden = false;
+  for (const id of ["btnFlip", "btnSkeleton", "btnStop"]) $(id).disabled = true;
+  setStatus("준비됨", "ready");
+});
+
+init();
+</script>
+</body>
+</html>
