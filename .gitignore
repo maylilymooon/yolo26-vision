@@ -2,3 +2,4 @@ __pycache__/
 *.pt
 *.task
 videos/
+gesture_data/

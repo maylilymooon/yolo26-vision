@@ -1,4 +1,4 @@
-﻿"""MediaPipe Hand Landmarker 실시간 손 랜드마크 검출 (손 하나당 21개 관절점).
+"""MediaPipe Hand Landmarker 실시간 손 랜드마크 검출 (손 하나당 21개 관절점).
 
 실행:
     python hand_landmarker.py        # 웹캠 0번
@@ -10,6 +10,7 @@
 """
 
 import os
+import re
 import sys
 import time
 
@@ -35,26 +36,46 @@ def should_quit():
     return cv2.getWindowProperty(WINDOW_NAME, cv2.WND_PROP_VISIBLE) < 1
 
 
-def download_youtube(url):
-    """yt-dlp로 유튜브 영상을 받아 로컬 경로를 반환 (이미 받았으면 재사용)."""
+def download_youtube(url, max_side=1280, progress=None):
+    """yt-dlp로 유튜브 영상을 받아 로컬 경로를 반환 (이미 받았으면 재사용).
+
+    max_side: 가로·세로 최대 픽셀 (1280 = 720p, 854 = 480p). 작을수록 빨리 받아진다.
+    progress: 진행률(0~100)을 받을 함수. UI에 다운로드 상황을 보여줄 때 사용.
+    """
     import imageio_ffmpeg
     import yt_dlp
 
-    video = "bestvideo[ext=mp4][vcodec^=avc1][width<=1280][height<=1280]"
+    name = "%(id)s" if max_side == 1280 else f"%(id)s_{max_side}"
+    # 주소에서 영상 ID를 바로 뽑아 이미 받은 파일이 있으면 즉시 반환 (유튜브 조회에 몇 초 걸려서)
+    m = re.search(r"(?:v=|youtu\.be/|shorts/|embed/)([\w-]{11})", url)
+    if m:
+        cached = os.path.join(VIDEO_DIR, name.replace("%(id)s", m.group(1)) + ".mp4")
+        if os.path.exists(cached):
+            return cached
+
+    video = f"bestvideo[ext=mp4][vcodec^=avc1][width<={max_side}][height<={max_side}]"
     opts = {
-        # OpenCV가 읽기 쉬운 H.264(mp4) 영상만, 가로·세로 1280px 이하 = 720p (검출엔 소리 불필요)
+        # OpenCV가 읽기 쉬운 H.264(mp4) 영상만 (검출엔 소리 불필요)
         # HLS(m3u8)를 우선: 일반(DASH) 다운로드는 긴 영상에서 중간부터 깨진 파일이 받아지는 경우가 있음
         "format": f"{video}[protocol^=m3u8]/{video}/best[ext=mp4]/best",
-        "outtmpl": os.path.join(VIDEO_DIR, "%(id)s.%(ext)s"),
+        "outtmpl": os.path.join(VIDEO_DIR, name + ".%(ext)s"),
         "ffmpeg_location": imageio_ffmpeg.get_ffmpeg_exe(),  # HLS 조각 합치기용 (pip 패키지에 포함된 ffmpeg)
         "quiet": True,
+        "noprogress": progress is not None,  # UI가 진행률을 보여줄 땐 터미널 출력 생략
     }
+    if progress is not None:
+        def hook(d):
+            if d["status"] == "downloading":
+                total = d.get("total_bytes") or d.get("total_bytes_estimate")
+                if total:
+                    progress(min(100.0, d["downloaded_bytes"] / total * 100))
+        opts["progress_hooks"] = [hook]
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
         path = ydl.prepare_filename(info)
         if not os.path.exists(path):
             print(f"다운로드 중: {url}")
-            ydl.download([url])
+            ydl.process_ie_result(info, download=True)  # 위에서 조회한 정보로 바로 받기 (재조회 안 함)
     return path
 
 

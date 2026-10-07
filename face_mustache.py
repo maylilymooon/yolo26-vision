@@ -1,4 +1,4 @@
-﻿"""MediaPipe Face Landmarker로 얼굴에 콧수염 AR 필터 붙이기.
+"""MediaPipe Face Landmarker로 얼굴에 콧수염 AR 필터 붙이기.
 
 코와 윗입술 사이에 콧수염을 그리고, 입꼬리 간격으로 크기를,
 두 입꼬리를 잇는 선의 기울기로 회전을 맞춘다 (고개를 기울여도 따라감).
