@@ -104,12 +104,13 @@
   <div class="controls">
     <button id="btnFlip" disabled>앞·뒤 카메라 바꾸기</button>
     <button id="btnSkeleton" aria-pressed="true" disabled>손 뼈대 숨기기</button>
+    <button id="btnScores" aria-pressed="false" disabled>표정 수치 보기</button>
     <button id="btnStop" disabled>멈추기</button>
   </div>
 
   <section class="legend" aria-label="반응 목록">
     <h2>손</h2>
-    <div class="item"><small>✌️ 브이</small><b style="color:var(--accent)">따봉</b></div>
+    <div class="item"><small>✌️ 브이</small><b style="color:#2f9bff">브이</b></div>
     <div class="item"><small>✌️ 브이를 옆으로</small><b style="color:var(--pink)">쁘-이</b></div>
     <div class="item"><small>👍 따봉</small><b style="color:var(--accent)">따봉</b></div>
     <div class="item"><small>✊ 주먹</small><b style="color:#8f8fff">주먹</b></div>
@@ -134,20 +135,20 @@ const FACE_MODEL = `${MODEL}/face_landmarker/face_landmarker/float16/latest/face
 
 // reaction_cam.py 와 같은 규칙
 const GESTURE_TEXT = {
-  v: ["따봉", "#ff8a1f"], v_side: ["쁘-이", "#ff4fa0"], thumbs_up: ["따봉", "#ff8a1f"],
+  v: ["브이", "#2f9bff"], v_side: ["쁘-이", "#ff4fa0"], thumbs_up: ["따봉", "#ff8a1f"],
   fist: ["주먹", "#5a5adc"], palm: ["하이파이브", "#14a05a"], half_heart: ["하트", "#eb2846"],
 };
 const CANNED_TO_LABEL = { Victory: "v", Thumb_Up: "thumbs_up", Closed_Fist: "fist", Open_Palm: "palm" };
 const FACE_TEXT = { smile: ["스마일", "#ffaa00"], frown: ["웃으세용!", "#783cdc"] };
 const CANNED_MIN_SCORE = 0.5, SIDEWAYS_DEG = 50, SMOOTH_FRAMES = 5;
-const SMILE_MIN = 0.5, FROWN_MIN = 0.4, JAW_OPEN_MIN = 0.45, MOTHS_PER_SEC = 8, MOTH_LIFE = 3;
+const SMILE_MIN = 0.5, FROWN_MIN = 0.25, JAW_OPEN_MIN = 0.45, MOTHS_PER_SEC = 8, MOTH_LIFE = 3;
 const FOREHEAD = 10, UPPER_LIP = 13, LOWER_LIP = 14, MOUTH_L = 61, MOUTH_R = 291;
 
 const $ = (id) => document.getElementById(id);
 const canvas = $("out"), ctx = canvas.getContext("2d"), video = $("video");
 const statusEl = $("status");
 let recognizer, faceLandmarker, stream = null, facing = "user", mirror = true;
-let running = false, showSkeleton = true, lastVideoTime = -1, frameNo = 0;
+let running = false, showSkeleton = true, showScores = false, lastScores = null, lastVideoTime = -1, frameNo = 0;
 let handResult = null, faceResult = null, prevT = performance.now(), fpsAvg = 0;
 const handHist = [[], []], faceHist = [[], []];
 let moths = [], spawnCredit = 0;
@@ -211,7 +212,7 @@ function stopInput() {
 }
 function begin() {
   $("start").hidden = true;
-  for (const id of ["btnFlip", "btnSkeleton", "btnStop"]) $(id).disabled = false;
+  for (const id of ["btnFlip", "btnSkeleton", "btnScores", "btnStop"]) $(id).disabled = false;
   $("btnFlip").disabled = !stream;
   running = true; lastVideoTime = -1; moths = []; handHist.forEach((h) => (h.length = 0)); faceHist.forEach((h) => (h.length = 0));
   requestAnimationFrame(loop);
@@ -236,12 +237,37 @@ function classifyHand(lm, gestures, W, H) {
   if (label === "v" && isSideways(lm, W, H)) label = "v_side";
   return label || null;
 }
-function faceReaction(cats) {
+function faceScores(cats) {
   const b = Object.fromEntries(cats.map((c) => [c.categoryName, c.score]));
   const avg = (a, z) => (b[a] + b[z]) / 2;
-  if (avg("mouthSmileLeft", "mouthSmileRight") >= SMILE_MIN) return "smile";
-  const frown = Math.max(avg("browDownLeft", "browDownRight"), avg("mouthFrownLeft", "mouthFrownRight"), avg("noseSneerLeft", "noseSneerRight"));
-  return frown >= FROWN_MIN ? "frown" : null;
+  return {
+    smile: avg("mouthSmileLeft", "mouthSmileRight"),
+    // 찡그림: 미간 내리기·코 찡그리기·입꼬리 내리기 중 가장 강한 것.
+    // 입꼬리 내림 점수는 실제로 찡그려도 작게 나와서 2배로 본다.
+    frown: Math.max(avg("browDownLeft", "browDownRight"), avg("noseSneerLeft", "noseSneerRight"),
+                    2 * avg("mouthFrownLeft", "mouthFrownRight")),
+    jaw: b.jawOpen || 0,
+  };
+}
+function faceReaction(sc) {
+  if (sc.smile >= SMILE_MIN) return "smile";
+  return sc.frown >= FROWN_MIN ? "frown" : null;
+}
+function drawScores(sc) {
+  // 표정 수치 확인용: 막대가 세로선(기준)을 넘으면 반응한다
+  const rows = [["웃음", sc.smile, SMILE_MIN, "#ffaa00"], ["찡그림", sc.frown, FROWN_MIN, "#b07cff"], ["입 벌림", sc.jaw, JAW_OPEN_MIN, "#c9a27a"]];
+  const u = Math.max(14, Math.round(canvas.height / 36)), barW = u * 7, x0 = u * 0.8, y0 = canvas.height - rows.length * u * 1.6 - u;
+  ctx.fillStyle = "rgba(0,0,0,.55)";
+  ctx.beginPath(); ctx.roundRect(x0 - u * 0.4, y0 - u * 0.4, barW + u * 5.2, rows.length * u * 1.6 + u * 0.4, u * 0.5); ctx.fill();
+  ctx.font = `600 ${u}px "Noto Sans KR", sans-serif`; ctx.textBaseline = "middle";
+  rows.forEach(([name, v, thr, col], i) => {
+    const y = y0 + i * u * 1.6, bx = x0 + u * 3.6;
+    ctx.fillStyle = "#fff"; ctx.fillText(name, x0, y + u * 0.5);
+    ctx.fillStyle = "rgba(255,255,255,.2)"; ctx.fillRect(bx, y + u * 0.15, barW, u * 0.7);
+    ctx.fillStyle = col; ctx.fillRect(bx, y + u * 0.15, barW * Math.min(1, v), u * 0.7);
+    ctx.fillStyle = "#fff"; ctx.fillRect(bx + barW * thr - 1, y, 2, u);
+    ctx.fillText(v.toFixed(2), bx + barW + u * 0.4, y + u * 0.5);
+  });
 }
 
 // ---------- 나방
@@ -345,10 +371,12 @@ function process() {
 
   if (faceResult && faceResult.faceLandmarks.length) {
     const lm = faceResult.faceLandmarks[0], cats = faceResult.faceBlendshapes[0]?.categories || [];
-    push(faceHist[0], cats.length ? faceReaction(cats) : null);
+    const sc = cats.length ? faceScores(cats) : null;
+    push(faceHist[0], sc ? faceReaction(sc) : null);
+    lastScores = sc;
     const shown = majority(faceHist[0]);
     if (shown) labels.push([...FACE_TEXT[shown], px(lm[FOREHEAD]), py(lm[FOREHEAD]) - 20]);
-    const jaw = cats.find((c) => c.categoryName === "jawOpen")?.score || 0;
+    const jaw = sc ? sc.jaw : 0;
     if (jaw >= JAW_OPEN_MIN) {
       const mouthW = Math.hypot(px(lm[MOUTH_R]) - px(lm[MOUTH_L]), py(lm[MOUTH_R]) - py(lm[MOUTH_L]));
       const mx = (px(lm[UPPER_LIP]) + px(lm[LOWER_LIP])) / 2, my = (py(lm[UPPER_LIP]) + py(lm[LOWER_LIP])) / 2;
@@ -361,6 +389,7 @@ function process() {
   moths = moths.filter((m) => m.alive(W, H));
   for (const m of moths) m.draw(ctx);
   for (const [text, color, cx, by] of labels) bubble(text, cx, by, color, size);
+  if (showScores && lastScores) drawScores(lastScores);
   setStatus(`${Math.round(fpsAvg)} fps`, "ready");
 }
 
@@ -373,9 +402,14 @@ $("btnSkeleton").addEventListener("click", (e) => {
   e.currentTarget.textContent = showSkeleton ? "손 뼈대 숨기기" : "손 뼈대 보이기";
   e.currentTarget.setAttribute("aria-pressed", String(showSkeleton));
 });
+$("btnScores").addEventListener("click", (e) => {
+  showScores = !showScores;
+  e.currentTarget.textContent = showScores ? "표정 수치 숨기기" : "표정 수치 보기";
+  e.currentTarget.setAttribute("aria-pressed", String(showScores));
+});
 $("btnStop").addEventListener("click", () => {
   stopInput(); $("start").hidden = false;
-  for (const id of ["btnFlip", "btnSkeleton", "btnStop"]) $(id).disabled = true;
+  for (const id of ["btnFlip", "btnSkeleton", "btnScores", "btnStop"]) $(id).disabled = true;
   setStatus("준비됨", "ready");
 });
 
