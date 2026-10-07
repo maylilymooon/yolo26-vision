@@ -104,7 +104,7 @@
   <div class="controls">
     <button id="btnFlip" disabled>앞·뒤 카메라 바꾸기</button>
     <button id="btnSkeleton" aria-pressed="true" disabled>손 뼈대 숨기기</button>
-    <button id="btnScores" aria-pressed="false" disabled>표정 수치 보기</button>
+    <button id="btnScores" aria-pressed="false" disabled>인식 수치 보기</button>
     <button id="btnStop" disabled>멈추기</button>
   </div>
 
@@ -122,6 +122,7 @@
     <div class="item"><small>😮 입 벌리기</small><b>나방 🦋</b></div>
   </section>
   <p class="note">반쪽 하트는 기본 모델에 없는 동작이라 웹 버전에서는 아직 인식하지 않아요. 영상은 기기 안에서만 처리되고 어디로도 전송되지 않아요.</p>
+  <p class="note">버전 3 · 브이=브이</p>
 </main>
 
 <script type="module">
@@ -148,7 +149,7 @@ const $ = (id) => document.getElementById(id);
 const canvas = $("out"), ctx = canvas.getContext("2d"), video = $("video");
 const statusEl = $("status");
 let recognizer, faceLandmarker, stream = null, facing = "user", mirror = true;
-let running = false, showSkeleton = true, showScores = false, lastScores = null, lastVideoTime = -1, frameNo = 0;
+let running = false, showSkeleton = true, showScores = false, lastScores = null, lastHands = [], lastVideoTime = -1, frameNo = 0;
 let handResult = null, faceResult = null, prevT = performance.now(), fpsAvg = 0;
 const handHist = [[], []], faceHist = [[], []];
 let moths = [], spawnCredit = 0;
@@ -253,12 +254,13 @@ function faceReaction(sc) {
   if (sc.smile >= SMILE_MIN) return "smile";
   return sc.frown >= FROWN_MIN ? "frown" : null;
 }
-function drawScores(sc) {
+function drawScores(sc, hands) {
   // 표정 수치 확인용: 막대가 세로선(기준)을 넘으면 반응한다
   const rows = [["웃음", sc.smile, SMILE_MIN, "#ffaa00"], ["찡그림", sc.frown, FROWN_MIN, "#b07cff"], ["입 벌림", sc.jaw, JAW_OPEN_MIN, "#c9a27a"]];
-  const u = Math.max(14, Math.round(canvas.height / 36)), barW = u * 7, x0 = u * 0.8, y0 = canvas.height - rows.length * u * 1.6 - u;
+  const u = Math.max(14, Math.round(canvas.height / 36)), barW = u * 7, x0 = u * 0.8;
+  const lines = rows.length + hands.length, y0 = canvas.height - lines * u * 1.6 - u;
   ctx.fillStyle = "rgba(0,0,0,.55)";
-  ctx.beginPath(); ctx.roundRect(x0 - u * 0.4, y0 - u * 0.4, barW + u * 5.2, rows.length * u * 1.6 + u * 0.4, u * 0.5); ctx.fill();
+  ctx.beginPath(); ctx.roundRect(x0 - u * 0.4, y0 - u * 0.4, barW + u * 6.5, lines * u * 1.6 + u * 0.4, u * 0.5); ctx.fill();
   ctx.font = `600 ${u}px "Noto Sans KR", sans-serif`; ctx.textBaseline = "middle";
   rows.forEach(([name, v, thr, col], i) => {
     const y = y0 + i * u * 1.6, bx = x0 + u * 3.6;
@@ -268,6 +270,8 @@ function drawScores(sc) {
     ctx.fillStyle = "#fff"; ctx.fillRect(bx + barW * thr - 1, y, 2, u);
     ctx.fillText(v.toFixed(2), bx + barW + u * 0.4, y + u * 0.5);
   });
+  // 손: 모델이 본 제스처 이름과 점수 → 화면에 띄우는 글자
+  hands.forEach((t, i) => { ctx.fillStyle = "#fff"; ctx.fillText("손 " + t, x0, y0 + (rows.length + i) * u * 1.6 + u * 0.5); });
 }
 
 // ---------- 나방
@@ -356,11 +360,14 @@ function process() {
   if (handResult) {
     const lms = handResult.landmarks;
     const order = lms.map((_, i) => i).sort((a, b) => px(lms[a][0]) - px(lms[b][0]));
+    lastHands = [];
     for (let slot = 0; slot < 2; slot++) {
       if (slot >= order.length) { handHist[slot].length = 0; continue; }
       const i = order[slot], lm = lms[i];
       if (showSkeleton) drawSkeleton(lm, px, py);
-      push(handHist[slot], classifyHand(lm, handResult.gestures[i], W, H));
+      const label = classifyHand(lm, handResult.gestures[i], W, H), top0 = handResult.gestures[i][0];
+      lastHands.push(`${top0 ? top0.categoryName + " " + top0.score.toFixed(2) : "?"} → ${label ? GESTURE_TEXT[label][0] : "없음"}`);
+      push(handHist[slot], label);
       const shown = majority(handHist[slot]);
       if (shown) {
         const cx = lm.reduce((s, p) => s + px(p), 0) / lm.length, top = Math.min(...lm.map(py));
@@ -389,7 +396,7 @@ function process() {
   moths = moths.filter((m) => m.alive(W, H));
   for (const m of moths) m.draw(ctx);
   for (const [text, color, cx, by] of labels) bubble(text, cx, by, color, size);
-  if (showScores && lastScores) drawScores(lastScores);
+  if (showScores) drawScores(lastScores || { smile: 0, frown: 0, jaw: 0 }, lastHands);
   setStatus(`${Math.round(fpsAvg)} fps`, "ready");
 }
 
@@ -404,7 +411,7 @@ $("btnSkeleton").addEventListener("click", (e) => {
 });
 $("btnScores").addEventListener("click", (e) => {
   showScores = !showScores;
-  e.currentTarget.textContent = showScores ? "표정 수치 숨기기" : "표정 수치 보기";
+  e.currentTarget.textContent = showScores ? "인식 수치 숨기기" : "인식 수치 보기";
   e.currentTarget.setAttribute("aria-pressed", String(showScores));
 });
 $("btnStop").addEventListener("click", () => {
